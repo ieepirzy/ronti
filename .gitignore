@@ -1,3 +1,6 @@
 __pycache__/
 .venv/
 dist/
+.claude/
+ronti.egg-info/
+ronti.egg-info/PKG-INFO

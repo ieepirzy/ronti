@@ -4,11 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ronti"
-version = "0.1.0"
+version = "0.1.1"
 description = "System-wide pip install audit logger with OSV vulnerability scanning"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 dependencies = []
+readme = "README.md"
 
 [project.scripts]
 ronti = "ronti.cli:main"
