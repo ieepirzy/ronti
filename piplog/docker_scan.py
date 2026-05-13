@@ -202,7 +202,8 @@ def main():
                 for v in vulns:
                     fix = f"fix: {v['fixed']}" if v["fixed"] else "no fix available"
                     print(f"  {sev_str(v['severity'])}  {pkg}=={ver}  {GRAY}{v['id']}{RESET}")
-                    print(f"    {v['summary']}")
+                    if v["summary"]:
+                        print(f"    {v['summary']}")
                     if v["cve"]:
                         print(f"    {v['cve']}  {GRAY}({fix}){RESET}")
                     else:

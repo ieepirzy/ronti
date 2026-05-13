@@ -419,7 +419,8 @@ def cmd_docker_scan(args):
             for v in vulns:
                 fix = f"fix: {v['fixed']}" if v["fixed"] else "no fix available"
                 print(f"  {_sev(v['severity'])}  {_col(pkg, BOLD)}=={ver}  {GRAY}{v['id']}{RESET}")
-                print(f"    {v['summary']}")
+                if v["summary"]:
+                    print(f"    {v['summary']}")
                 ref = _col(v['cve'], CYAN) if v['cve'] else v['id']
                 print(f"    {ref}  {GRAY}({fix}){RESET}")
         print()
@@ -453,7 +454,8 @@ def _cmd_scan_osv(args) -> None:
         for v in vulns:
             fix = f"fix: {v['fixed']}" if v["fixed"] else "no fix available"
             print(f"  {_sev(v['severity'])}  {_col(pkg, BOLD)}=={ver}")
-            print(f"    {v['summary']}")
+            if v["summary"]:
+                print(f"    {v['summary']}")
             if v["cve"]:
                 id_suffix = f"  {GRAY}{v['id']}{RESET}" if v["id"] != v["cve"] else ""
                 print(f"    {_col(v['cve'], CYAN)}{id_suffix}")

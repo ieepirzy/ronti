@@ -107,14 +107,39 @@ def query_packages(
                 )
             conn.commit()
 
-    # Assemble final results
+    # Assemble final results, deduplicating by CVE (prefer richer GHSA over PYSEC)
     results: dict[tuple[str, str], list[dict]] = {}
     for key, ids in pkg_vuln_ids.items():
         parsed = [_parse_vuln(vuln_details[vid]) for vid in ids if vid in vuln_details]
         if parsed:
-            results[key] = parsed
+            results[key] = _dedup_by_cve(parsed)
 
     return results
+
+
+def _dedup_by_cve(vulns: list[dict]) -> list[dict]:
+    """Deduplicate vuln list by CVE, keeping the entry with the most data."""
+    cve_best: dict[str, dict] = {}
+    no_cve: list[dict] = []
+    for v in vulns:
+        cve = v.get("cve")
+        if not cve:
+            no_cve.append(v)
+            continue
+        existing = cve_best.get(cve)
+        if existing is None:
+            cve_best[cve] = v
+        else:
+            # Prefer: non-unknown severity > non-empty summary > GHSA id over PYSEC
+            def score(e: dict) -> int:
+                return (
+                    (e["severity"] != "unknown") * 4
+                    + bool(e.get("summary")) * 2
+                    + (not e["id"].startswith("PYSEC")) * 1
+                )
+            if score(v) > score(existing):
+                cve_best[cve] = v
+    return list(cve_best.values()) + no_cve
 
 
 def _fetch_osv_batch(
