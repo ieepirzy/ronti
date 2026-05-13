@@ -7,6 +7,11 @@ The batch endpoint only returns stubs; full details are fetched per-ID
 in parallel via ThreadPoolExecutor so a cold cache stays fast.
 """
 import json
+import os
+import re
+import shutil
+import subprocess
+import tempfile
 import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
@@ -197,6 +202,24 @@ def _parse_vuln(v: dict) -> dict:
     }
 
 
+def _first_sentence(text: str, max_len: int = 150) -> str:
+    """Trim advisory markdown text to a single displayable sentence.
+
+    pip-audit collapses newlines to double-spaces and leads with markdown
+    section headers (## Impact, ### Summary).  Strip those before trimming.
+    """
+    # Drop leading markdown headers (## Impact, ### Summary, etc.)
+    text = re.sub(r"^(#+\s+\S+\s+)+", "", text.strip())
+    # pip-audit uses double-space as paragraph separator
+    text = text.split("  ")[0].strip()
+    # Trim at first sentence boundary within max_len
+    for sep in (". ", "! ", "? "):
+        pos = text.find(sep)
+        if 0 < pos < max_len:
+            return text[: pos + 1]
+    return text[:max_len].rstrip() + ("…" if len(text) > max_len else "")
+
+
 def _normalize_severity(s: str) -> str:
     return {
         "CRITICAL": "critical",
@@ -221,3 +244,161 @@ def _severity_from_cvss(vector: str) -> str:
     if highs >= 1:
         return "medium"
     return "low"
+
+
+# ── pip-audit backend ─────────────────────────────────────────────────────────
+
+def _pip_audit_exe() -> str | None:
+    """Return the pip-audit executable path, or None if not on PATH."""
+    return shutil.which("pip-audit")
+
+
+def _query_via_pip_audit(
+    packages: list[tuple[str, str]],
+    conn=None,
+) -> dict[tuple[str, str], list[dict]] | None:
+    """Run pip-audit for detection, enrich severity from the OSV vuln cache.
+
+    Returns None if pip-audit is unavailable or fails, so the caller can
+    fall back to query_packages().
+    """
+    exe = _pip_audit_exe()
+    if not exe:
+        return None
+
+    req_fd, req_path = tempfile.mkstemp(suffix=".txt", prefix="piplog-audit-")
+    try:
+        with os.fdopen(req_fd, "w") as f:
+            for name, version in packages:
+                f.write(f"{name}=={version}\n")
+
+        result = subprocess.run(
+            [exe, "--format=json", "--no-deps", "-r", req_path],
+            capture_output=True, text=True, timeout=120,
+        )
+    finally:
+        os.unlink(req_path)
+
+    # pip-audit exits 1 when vulnerabilities are found — that's not a failure
+    if result.returncode not in (0, 1):
+        return None
+
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+
+    # Parse — deduplicate by ID (pip-audit can return the same ID from both
+    # the PyPA and GHSA sources in the same run)
+    raw: dict[tuple[str, str], dict[str, dict]] = {}
+    for dep in data.get("dependencies", []):
+        key = (dep["name"].lower(), dep["version"])
+        seen: set[str] = set()
+        for v in dep.get("vulns", []):
+            vid = v["id"]
+            if vid in seen:
+                continue
+            seen.add(vid)
+            cve  = next((a for a in v.get("aliases", []) if a.startswith("CVE-")), None)
+            ghsa = next((a for a in v.get("aliases", []) if a.startswith("GHSA-")), None)
+            if cve is None and vid.startswith("CVE-"):
+                cve = vid
+            fix  = v["fix_versions"][0] if v.get("fix_versions") else None
+            raw.setdefault(key, {})[vid] = {
+                "id": vid, "cve": cve, "ghsa": ghsa,
+                "summary": _first_sentence(v.get("description") or ""),
+                "severity": "unknown", "fixed": fix,
+            }
+
+    if not raw:
+        return {}
+
+    # Enrich severity: look up each GHSA alias in the OSV vuln cache, fetching
+    # any that are missing.  This gives us database_specific.severity without
+    # re-running the full OSV flow.
+    ghsa_ids = {v["ghsa"] for vulns in raw.values() for v in vulns.values() if v["ghsa"]}
+    if ghsa_ids:
+        details: dict[str, dict] = {}
+        missing: set[str] = set()
+        if conn is not None:
+            for gid in ghsa_ids:
+                row = conn.execute(
+                    "SELECT vuln_json FROM osv_vulns WHERE id=?", (gid,)
+                ).fetchone()
+                if row:
+                    details[gid] = json.loads(row["vuln_json"])
+                else:
+                    missing.add(gid)
+        else:
+            missing = ghsa_ids
+
+        if missing:
+            fetched = _fetch_vuln_details(missing)
+            details.update(fetched)
+            if conn is not None and fetched:
+                now = datetime.now(timezone.utc).isoformat()
+                for gid, rec in fetched.items():
+                    conn.execute(
+                        "INSERT OR REPLACE INTO osv_vulns (id, fetched_ts, vuln_json)"
+                        " VALUES (?,?,?)",
+                        (gid, now, json.dumps(rec)),
+                    )
+                conn.commit()
+
+        for vulns in raw.values():
+            for v in vulns.values():
+                if not v["ghsa"] or v["ghsa"] not in details:
+                    continue
+                rec = details[v["ghsa"]]
+                db_sev = (rec.get("database_specific") or {}).get("severity", "")
+                sev = _normalize_severity(db_sev)
+                if not sev:
+                    for s in rec.get("severity", []):
+                        sev = _severity_from_cvss(s.get("score", ""))
+                        if sev:
+                            break
+                v["severity"] = sev or "unknown"
+
+    # Deduplicate across IDs by CVE: prefer the GHSA entry (richer metadata)
+    # over the PYSEC mirror of the same CVE.
+    results: dict[tuple[str, str], list[dict]] = {}
+    for key, vulns in raw.items():
+        cve_seen: dict[str, dict] = {}
+        unique: list[dict] = []
+        for v in vulns.values():
+            if v["cve"]:
+                if v["cve"] not in cve_seen:
+                    cve_seen[v["cve"]] = v
+                    unique.append(v)
+                elif v["ghsa"] and not cve_seen[v["cve"]]["ghsa"]:
+                    # Replace PYSEC duplicate with richer GHSA entry
+                    unique = [x for x in unique if x.get("cve") != v["cve"]]
+                    unique.append(v)
+                    cve_seen[v["cve"]] = v
+            else:
+                unique.append(v)
+        if unique:
+            results[key] = [
+                {"id": v["id"], "cve": v["cve"], "summary": v["summary"],
+                 "severity": v["severity"], "fixed": v["fixed"]}
+                for v in unique
+            ]
+
+    return results
+
+
+def query_preferred(
+    packages: list[tuple[str, str]],
+    conn=None,
+) -> dict[tuple[str, str], list[dict]]:
+    """Query with pip-audit when available, falling back to our OSV client.
+
+    pip-audit is preferred for CLI scan commands because it handles PURL
+    normalisation and advisory source merging more robustly than our client.
+    The shim and docker-scan use query_packages() directly so they stay
+    dependency-free.
+    """
+    result = _query_via_pip_audit(packages, conn)
+    if result is not None:
+        return result
+    return query_packages(packages, conn)

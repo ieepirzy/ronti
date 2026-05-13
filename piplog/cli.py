@@ -87,9 +87,8 @@ def cmd_scan(args):
 
     if not hits:
         print(f"\n{_col('✓', GREEN)} No advisory matches found in install history.\n")
-        return
-
-    print(f"\n{_col('⚠  ADVISORY MATCHES', RED)}  ({len(hits)} found)\n{_hr()}")
+    else:
+        print(f"\n{_col('⚠  ADVISORY MATCHES', RED)}  ({len(hits)} found)\n{_hr()}")
     for h in hits:
         venv = Path(h["venv_path"]).name if h["venv_path"] else "global"
         print(f"  {_sev(h['severity'])}  {_col(h['package'], BOLD)}=={h['version']}")
@@ -365,14 +364,17 @@ def cmd_docker_scan(args):
 
 def _cmd_scan_osv(args) -> None:
     """OSV scan portion of `piplog scan --osv` and `piplog osv-scan`."""
-    from .osv import query_packages
+    from .osv import query_preferred, _pip_audit_exe
+
+    backend = f"pip-audit ({_pip_audit_exe()})" if _pip_audit_exe() else "osv.dev client"
+    print(f"{GRAY}scanning via {backend}…{RESET}")
 
     with get_conn() as conn:
         rows = conn.execute(
             "SELECT DISTINCT package, version FROM installs"
         ).fetchall()
         packages = [(r["package"], r["version"]) for r in rows]
-        osv_hits = query_packages(packages, conn)
+        osv_hits = query_preferred(packages, conn)
 
     total = sum(len(v) for v in osv_hits.values())
     if not osv_hits:
@@ -386,7 +388,8 @@ def _cmd_scan_osv(args) -> None:
             print(f"  {_sev(v['severity'])}  {_col(pkg, BOLD)}=={ver}")
             print(f"    {v['summary']}")
             if v["cve"]:
-                print(f"    {_col(v['cve'], CYAN)}  {GRAY}{v['id']}{RESET}")
+                id_suffix = f"  {GRAY}{v['id']}{RESET}" if v["id"] != v["cve"] else ""
+                print(f"    {_col(v['cve'], CYAN)}{id_suffix}")
             else:
                 print(f"    {GRAY}{v['id']}{RESET}")
             print(f"    {GRAY}{fix}{RESET}")
