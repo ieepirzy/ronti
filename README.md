@@ -4,6 +4,18 @@ System-wide pip install audit logger with OSV vulnerability scanning. Intercepts
 every `pip install`, logs it to a local SQLite database, and alerts on known
 vulnerabilities at install time.
 
+## Purpose
+
+rönti is a personal tool I developed in response to recent supply chain attacks (Shai-Hulud / TeamPCP campaigns) of the open source ecosystem as a part of a large-scale worming attack. While CI/CD and production environments already implement various security scanners, developer and individual machines rarely bother with setting up such an extensive suite of tools, and I have not found a tool that does this cleanly/automatically for developers, even if scripts do exist.
+
+rönti hooks into every `pip install` and does an automatic precheck and post install check for the package and its dependencies, querying the osv.dev CVE database. This way it is possible to automate at the install level easy automatic vetting and notification of a user about CVEs they might have otherwise not known.
+
+I forecast that with the increased role of AI assistance in both finding CVEs defensively and creating them offensively, the number of CVEs discovered will be increasingly hard to keep up with manually.
+
+## Limitations
+
+I will provide only an implementation for python/pip, and eventually AUR support too. I do not have plans to create or maintain versions for other distros or languages. `uv` support may come in the future.
+
 ## Install
 
 rönti must be installed **system-wide** (into `/usr/local/bin`) so that `sudo`
@@ -42,18 +54,18 @@ install, CI pipeline, Docker build).
 ### Source install
 
 ```bash
-git clone https://github.com/you/ronti
+git clone https://github.com/ieeprizy/ronti
 sudo bash ronti/ronti/setup.sh
 ```
 
 ### Per-venv hook
-
-The pip shim only covers the system pip. To also log installs inside a specific
-venv:
-
-```bash
-ronti inject-venv /path/to/.venv
-```
+> [!IMPORTANT]
+>The pip shim only covers the system pip. To also log installs inside a specific
+>venv:
+>
+>```bash
+>ronti inject-venv /path/to/.venv
+>```
 
 ## How it works
 
@@ -155,3 +167,7 @@ advisories — user-managed known-bad packages (OSV is the primary source)
 osv_cache  — (package, version) → vuln IDs, 6 h TTL
 osv_vulns  — vuln ID → full record, no expiry
 ```
+
+### License
+
+MIT
