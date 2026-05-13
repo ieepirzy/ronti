@@ -68,6 +68,12 @@ sudo bash ronti/ronti/setup.sh
 >venv:
 >
 >```bash
+>ronti mount
+>```
+>
+>> Alternatively
+>
+>```bash
 >ronti inject-venv /path/to/.venv
 >```
 
