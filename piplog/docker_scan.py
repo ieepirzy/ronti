@@ -18,15 +18,18 @@ import sys
 import json
 import urllib.request
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 _OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
+_OSV_VULN_URL  = "https://api.osv.dev/v1/vulns/{}"
 _OSV_BATCH_SIZE = 1000
+_FETCH_WORKERS  = 10
 
 
 def _osv_query(packages: list[tuple[str, str]]) -> dict[tuple[str, str], list[dict]]:
-    """Batch-query OSV for (name, version) pairs. Returns hits only."""
-    results: dict[tuple[str, str], list[dict]] = {}
+    """Batch-query OSV then fetch full vuln records in parallel. Returns hits only."""
+    pkg_ids: dict[tuple[str, str], list[str]] = {}
     for i in range(0, len(packages), _OSV_BATCH_SIZE):
         chunk = packages[i : i + _OSV_BATCH_SIZE]
         payload = json.dumps({
@@ -46,9 +49,35 @@ def _osv_query(packages: list[tuple[str, str]]) -> dict[tuple[str, str], list[di
             print(f"[piplog-docker-scan] OSV query failed: {e}", file=sys.stderr)
             continue
         for (name, ver), result in zip(chunk, data.get("results", [])):
-            vulns = [_parse_osv_vuln(v) for v in result.get("vulns", [])]
-            if vulns:
-                results[(name, ver)] = vulns
+            ids = [v["id"] for v in result.get("vulns", []) if v.get("id")]
+            if ids:
+                pkg_ids[(name, ver)] = ids
+
+    if not pkg_ids:
+        return {}
+
+    # Fetch full vuln records in parallel
+    all_ids = {vid for ids in pkg_ids.values() for vid in ids}
+
+    def _fetch_one(vid: str):
+        req = urllib.request.Request(_OSV_VULN_URL.format(vid), method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return vid, json.loads(resp.read())
+        except (urllib.error.URLError, OSError, json.JSONDecodeError):
+            return vid, None
+
+    details: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=_FETCH_WORKERS) as ex:
+        for vid, rec in ex.map(_fetch_one, all_ids):
+            if rec:
+                details[vid] = rec
+
+    results: dict[tuple[str, str], list[dict]] = {}
+    for key, ids in pkg_ids.items():
+        parsed = [_parse_osv_vuln(details[vid]) for vid in ids if vid in details]
+        if parsed:
+            results[key] = parsed
     return results
 
 

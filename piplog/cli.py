@@ -318,19 +318,49 @@ def cmd_docker_scan(args):
                 if adv["bad_version"] is None or adv["bad_version"] == ver:
                     hits.append((name, ver, adv))
 
-    if not hits:
-        print("✓ piplog docker-scan: no advisory matches.")
-        sys.exit(0)
+    if hits:
+        print(f"\n{_col('⚠  piplog docker-scan:', RED)} {len(hits)} advisory match(es)\n{_hr()}")
+        for name, ver, adv in hits:
+            ver_str = f"=={ver}" if ver else ""
+            print(f"  {_sev(adv['severity'])}  {_col(name, BOLD)}{ver_str}")
+            print(f"    {adv['description']}")
+            if adv["cve"]:
+                print(f"    {_col(adv['cve'], CYAN)}")
+        print()
+    else:
+        print(f"{_col('✓', GREEN)} piplog docker-scan: no advisory matches ({len(packages)} packages checked).")
 
-    print(f"\n⚠  piplog docker-scan: {len(hits)} advisory match(es)\n" + "="*50)
-    for name, ver, adv in hits:
-        ver_str = f"=={ver}" if ver else ""
-        print(f"  [{adv['severity'].upper()}] {name}{ver_str}")
-        print(f"    {adv['description']}")
-        if adv["cve"]:
-            print(f"    {adv['cve']}")
-    print("="*50)
-    sys.exit(1)
+    # OSV query — covers transitive deps when using pip freeze
+    from .osv import query_packages
+    pkg_pairs = []
+    for spec in packages:
+        name_ver = spec.split("==")
+        name = name_ver[0].lower().strip()
+        ver  = name_ver[1].strip() if len(name_ver) > 1 else None
+        if ver:
+            pkg_pairs.append((name, ver))
+
+    osv_hits: dict = {}
+    if not getattr(args, "no_osv", False) and pkg_pairs:
+        with get_conn() as conn:
+            osv_hits = query_packages(pkg_pairs, conn)
+
+    if osv_hits:
+        osv_total = sum(len(v) for v in osv_hits.values())
+        print(f"\n{_col('⚠  OSV matches:', RED)} {osv_total} vuln(s) across {len(osv_hits)} package version(s)\n{_hr()}")
+        for (pkg, ver), vulns in sorted(osv_hits.items()):
+            for v in vulns:
+                fix = f"fix: {v['fixed']}" if v["fixed"] else "no fix available"
+                print(f"  {_sev(v['severity'])}  {_col(pkg, BOLD)}=={ver}  {GRAY}{v['id']}{RESET}")
+                print(f"    {v['summary']}")
+                ref = _col(v['cve'], CYAN) if v['cve'] else v['id']
+                print(f"    {ref}  {GRAY}({fix}){RESET}")
+        print()
+    elif not getattr(args, "no_osv", False):
+        print(f"{_col('✓', GREEN)} OSV: no matches ({len(pkg_pairs)} versioned packages checked).")
+
+    if hits or osv_hits:
+        sys.exit(1)
 
 
 def _cmd_scan_osv(args) -> None:
@@ -423,6 +453,7 @@ def main():
     # docker-scan
     p_ds = sub.add_parser("docker-scan", help="scan requirements/freeze for advisories, exit 1 on hit")
     p_ds.add_argument("-r", "--requirements", default=None, help="requirements.txt path")
+    p_ds.add_argument("--no-osv", action="store_true", help="skip OSV query (air-gapped builds)")
 
     # osv-scan
     p_osv = sub.add_parser("osv-scan", help="query OSV database for all recorded installs")

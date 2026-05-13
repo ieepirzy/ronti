@@ -44,8 +44,14 @@ CREATE TABLE IF NOT EXISTS osv_cache (
     package    TEXT NOT NULL,
     version    TEXT NOT NULL,
     checked_ts TEXT NOT NULL,
-    vulns_json TEXT NOT NULL,
+    vuln_ids   TEXT NOT NULL,
     PRIMARY KEY (package, version)
+);
+
+CREATE TABLE IF NOT EXISTS osv_vulns (
+    id         TEXT PRIMARY KEY,
+    fetched_ts TEXT NOT NULL,
+    vuln_json  TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_installs_pkg     ON installs(package, version);
