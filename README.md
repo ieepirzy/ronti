@@ -4,6 +4,8 @@
 
 # rönti
 
+> Canonical name is `rönti`, but to support a wide range of keyboards all commands use and reference `ronti`
+
 System-wide pip install audit logger with OSV vulnerability scanning. Intercepts
 every `pip install`, logs it to a local SQLite database, and alerts on known
 vulnerabilities at install time.
