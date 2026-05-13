@@ -1,3 +1,7 @@
+![PyPI version](https://img.shields.io/pypi/v/ronti)
+![PyPI - Python Version](https://img.shields.io/pypi/pyversions/ronti)
+![License](https://img.shields.io/pypi/l/ronti)
+
 # rönti
 
 System-wide pip install audit logger with OSV vulnerability scanning. Intercepts
