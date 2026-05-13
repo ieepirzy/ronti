@@ -5,7 +5,7 @@ set -euo pipefail
 # Run as root: sudo bash install.sh
 
 if [[ $EUID -ne 0 ]]; then
-    echo "Run as root: sudo bash install.sh"
+    echo "Run as root: sudo bash piplog/setup.sh"
     exit 1
 fi
 
@@ -18,15 +18,21 @@ echo "==> Installing piplog..."
 # 1. Install Python package system-wide
 python3 -m pip install -e "$SCRIPT_DIR" --quiet --break-system-packages
 
-# 2. Create DB directory, writable by all users
+# 2. Create DB directory and dedicated group for shared access
+groupadd -f piplog
 mkdir -p "$DB_DIR"
-chmod 1777 "$DB_DIR"          # sticky bit — users can write but not delete each other's rows
-echo "    DB dir: $DB_DIR (sticky 1777)"
+chown root:piplog "$DB_DIR"
+chmod 2775 "$DB_DIR"          # setgid: new files inherit piplog group
+echo "    DB dir: $DB_DIR (root:piplog 2775)"
 
 # 3. Initialize the DB as root so schema + advisories are seeded
 python3 -c "from piplog.db import init_db; init_db()"
-chmod 666 "$DB_DIR/audit.db"  # all users read/write the db file
-echo "    DB initialized: $DB_DIR/audit.db"
+chown root:piplog "$DB_DIR/audit.db"
+chmod 660 "$DB_DIR/audit.db"  # only root and piplog group members can read/write
+echo "    DB initialized: $DB_DIR/audit.db (root:piplog 660)"
+echo ""
+echo "    IMPORTANT: add each user to the piplog group so their installs are logged:"
+echo "    sudo usermod -aG piplog <username>  (user must re-login)"
 
 # 4. Install pip shim
 python3 -m piplog install-shim

@@ -40,6 +40,14 @@ CREATE TABLE IF NOT EXISTS advisories (
     added_ts    TEXT    NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS osv_cache (
+    package    TEXT NOT NULL,
+    version    TEXT NOT NULL,
+    checked_ts TEXT NOT NULL,
+    vulns_json TEXT NOT NULL,
+    PRIMARY KEY (package, version)
+);
+
 CREATE INDEX IF NOT EXISTS idx_installs_pkg     ON installs(package, version);
 CREATE INDEX IF NOT EXISTS idx_installs_ts      ON installs(ts);
 CREATE INDEX IF NOT EXISTS idx_deps_install     ON deps(install_id);

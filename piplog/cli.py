@@ -104,8 +104,11 @@ def cmd_scan(args):
         print(f"    install_id={h['id']}")
         print()
 
-    if args.fail:
+    if args.fail and hits:
         sys.exit(1)
+
+    if getattr(args, "osv", False):
+        _cmd_scan_osv(args)
 
 
 def cmd_tree(args):
@@ -207,7 +210,6 @@ def cmd_advisory(args):
         print()
 
     elif args.action == "add":
-        from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
         with get_conn() as conn:
             conn.execute(
@@ -253,8 +255,9 @@ def cmd_install_shim(args):
     target    = Path("/usr/local/bin/pip")
     real_dest = Path("/usr/local/bin/.pip-real")
 
-    # back up real pip
-    shutil.copy(real_pip, real_dest)
+    # back up real pip (skip if already backed up to avoid overwriting the shim itself)
+    if not real_dest.exists():
+        shutil.copy(real_pip, real_dest)
     shutil.copy(shim_src, target)
     target.chmod(0o755)
 
@@ -264,8 +267,10 @@ def cmd_install_shim(args):
     target3.chmod(0o755)
 
     # ensure piplog itself is importable system-wide
-    subprocess.run([sys.executable, "-m", "pip", "install", "-e",
-                    str(Path(__file__).parent.parent), "--quiet"], check=False)
+    r = subprocess.run([sys.executable, "-m", "pip", "install", "-e",
+                        str(Path(__file__).parent.parent), "--quiet"], check=False)
+    if r.returncode != 0:
+        print("Warning: failed to install piplog system-wide; shim may not be able to import it.", file=sys.stderr)
 
     print(f"Shim installed: {target} + {target3}")
     print(f"Real pip backed up: {real_dest}")
@@ -289,8 +294,11 @@ def cmd_docker_scan(args):
     else:
         result = subprocess.run(
             [sys.executable, "-m", "pip", "freeze"],
-            capture_output=True, text=True
+            capture_output=True, text=True, timeout=30
         )
+        if result.returncode != 0:
+            print(f"pip freeze failed: {result.stderr.strip()}", file=sys.stderr)
+            sys.exit(1)
         packages = [l.strip() for l in result.stdout.splitlines() if l.strip()]
 
     with get_conn() as conn:
@@ -325,6 +333,45 @@ def cmd_docker_scan(args):
     sys.exit(1)
 
 
+def _cmd_scan_osv(args) -> None:
+    """OSV scan portion of `piplog scan --osv` and `piplog osv-scan`."""
+    from .osv import query_packages
+
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT package, version FROM installs"
+        ).fetchall()
+        packages = [(r["package"], r["version"]) for r in rows]
+        osv_hits = query_packages(packages, conn)
+
+    total = sum(len(v) for v in osv_hits.values())
+    if not osv_hits:
+        print(f"\n{_col('✓', GREEN)} No OSV matches in install history.\n")
+        return
+
+    print(f"\n{_col('⚠  OSV MATCHES', RED)}  ({total} vulns across {len(osv_hits)} package versions)\n{_hr()}")
+    for (pkg, ver), vulns in sorted(osv_hits.items()):
+        for v in vulns:
+            fix = f"fix: {v['fixed']}" if v["fixed"] else "no fix available"
+            print(f"  {_sev(v['severity'])}  {_col(pkg, BOLD)}=={ver}")
+            print(f"    {v['summary']}")
+            if v["cve"]:
+                print(f"    {_col(v['cve'], CYAN)}  {GRAY}{v['id']}{RESET}")
+            else:
+                print(f"    {GRAY}{v['id']}{RESET}")
+            print(f"    {GRAY}{fix}{RESET}")
+            print()
+
+    if getattr(args, "fail", False) and osv_hits:
+        sys.exit(1)
+
+
+def cmd_osv_scan(args) -> None:
+    """Query OSV for all packages recorded in the install log."""
+    init_db()
+    _cmd_scan_osv(args)
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -342,6 +389,7 @@ def main():
     # scan
     p_scan = sub.add_parser("scan", help="scan install history against advisories")
     p_scan.add_argument("--fail", action="store_true", help="exit 1 if matches found")
+    p_scan.add_argument("--osv", action="store_true", help="also query OSV database (requires network)")
 
     # tree
     p_tree = sub.add_parser("tree", help="show dep tree for a package")
@@ -376,6 +424,10 @@ def main():
     p_ds = sub.add_parser("docker-scan", help="scan requirements/freeze for advisories, exit 1 on hit")
     p_ds.add_argument("-r", "--requirements", default=None, help="requirements.txt path")
 
+    # osv-scan
+    p_osv = sub.add_parser("osv-scan", help="query OSV database for all recorded installs")
+    p_osv.add_argument("--fail", action="store_true", help="exit 1 if matches found")
+
     args = parser.parse_args()
     dispatch = {
         "list":          cmd_list,
@@ -387,6 +439,7 @@ def main():
         "inject-venv":   cmd_inject_venv,
         "install-shim":  cmd_install_shim,
         "docker-scan":   cmd_docker_scan,
+        "osv-scan":      cmd_osv_scan,
     }
     dispatch[args.cmd](args)
 

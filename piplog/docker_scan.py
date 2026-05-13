@@ -16,21 +16,87 @@ Add --warn-only to always exit 0 (log but don't fail the build).
 import subprocess
 import sys
 import json
+import urllib.request
+import urllib.error
 from pathlib import Path
+
+_OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
+_OSV_BATCH_SIZE = 1000
+
+
+def _osv_query(packages: list[tuple[str, str]]) -> dict[tuple[str, str], list[dict]]:
+    """Batch-query OSV for (name, version) pairs. Returns hits only."""
+    results: dict[tuple[str, str], list[dict]] = {}
+    for i in range(0, len(packages), _OSV_BATCH_SIZE):
+        chunk = packages[i : i + _OSV_BATCH_SIZE]
+        payload = json.dumps({
+            "queries": [
+                {"package": {"name": n, "ecosystem": "PyPI"}, "version": v}
+                for n, v in chunk
+            ]
+        }).encode()
+        req = urllib.request.Request(
+            _OSV_BATCH_URL, data=payload,
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read())
+        except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
+            print(f"[piplog-docker-scan] OSV query failed: {e}", file=sys.stderr)
+            continue
+        for (name, ver), result in zip(chunk, data.get("results", [])):
+            vulns = [_parse_osv_vuln(v) for v in result.get("vulns", [])]
+            if vulns:
+                results[(name, ver)] = vulns
+    return results
+
+
+def _parse_osv_vuln(v: dict) -> dict:
+    cve = next((a for a in v.get("aliases", []) if a.startswith("CVE-")), None)
+    db_sev = (v.get("database_specific") or {}).get("severity", "")
+    severity = {"CRITICAL": "critical", "HIGH": "high", "MODERATE": "medium",
+                "MEDIUM": "medium", "LOW": "low"}.get(db_sev.upper(), "")
+    if not severity:
+        for s in v.get("severity", []):
+            vec = s.get("score", "")
+            if vec.startswith("CVSS:"):
+                highs = vec.count(":H")
+                network = "/AV:N" in vec
+                no_priv = "/PR:N" in vec
+                if highs >= 3 and network:
+                    severity = "critical"
+                elif highs >= 2 and (network or no_priv):
+                    severity = "high"
+                elif highs >= 1:
+                    severity = "medium"
+                else:
+                    severity = "low"
+                break
+    fixed = None
+    for affected in v.get("affected", []):
+        for r in affected.get("ranges", []):
+            if r.get("type") == "ECOSYSTEM":
+                for event in r.get("events", []):
+                    if "fixed" in event:
+                        fixed = event["fixed"]
+                        break
+    return {"id": v.get("id", ""), "cve": cve, "summary": v.get("summary", ""),
+            "severity": severity or "unknown", "fixed": fixed}
 
 # ── embedded advisory list ────────────────────────────────────────────────────
 # Keep this in sync with piplog/db.py BUILTIN_ADVISORIES.
 # Format: (package, bad_version_or_None, severity, description, cve_or_None)
 ADVISORIES = [
-    ("litellm",        "1.82.7",  "critical", "TeamPCP credential stealer via Trivy CI compromise",          "CVE-2026-33634"),
-    ("litellm",        "1.82.8",  "critical", "TeamPCP credential stealer, .pth persistence variant",        "CVE-2026-33634"),
-    ("telnyx",         "4.87.1",  "high",     "TeamPCP backdoor injected via stolen PyPI token",             None),
-    ("telnyx",         "4.87.2",  "high",     "TeamPCP backdoor injected via stolen PyPI token",             None),
-    ("lightning",      "2.6.2",   "critical", "Mini Shai-Hulud: credential stealer + JS payload on import",  None),
-    ("lightning",      "2.6.3",   "critical", "Mini Shai-Hulud: credential stealer + JS payload on import",  None),
-    ("mistralai",      "2.4.6",   "critical", "Shai-Hulud: imports transformers.pyz from 83.142.209.194",    None),
-    ("guardrails-ai",  None,      "high",     "Shai-Hulud wave: verify version against current advisories",  None),
-    ("dydx-v4-client", None,      "high",     "Wallet stealer + RAT, verify installed version",              None),
+    ("litellm",        "1.82.7",  "critical", "TeamPCP credential stealer via Trivy CI compromise",            "CVE-2026-33634"),
+    ("litellm",        "1.82.8",  "critical", "TeamPCP credential stealer, .pth persistence variant",          "CVE-2026-33634"),
+    ("telnyx",         "4.87.1",  "high",     "TeamPCP backdoor injected via stolen PyPI token",               None),
+    ("telnyx",         "4.87.2",  "high",     "TeamPCP backdoor injected via stolen PyPI token",               None),
+    ("lightning",      "2.6.2",   "critical", "Mini Shai-Hulud: credential stealer + JS payload on import",   None),
+    ("lightning",      "2.6.3",   "critical", "Mini Shai-Hulud: credential stealer + JS payload on import",   None),
+    ("mistralai",      "2.4.6",   "critical", "Shai-Hulud: imports transformers.pyz, exfils to 83.142.209.194", None),
+    ("guardrails-ai",  None,      "high",     "Shai-Hulud wave: verify version against advisories",            None),
+    ("dydx-v4-client", None,      "high",     "Wallet stealer + RAT, verify installed version",                None),
 ]
 
 RESET  = "\033[0m"
@@ -60,8 +126,11 @@ def load_packages(req_file=None):
     else:
         result = subprocess.run(
             [sys.executable, "-m", "pip", "freeze"],
-            capture_output=True, text=True
+            capture_output=True, text=True, timeout=30
         )
+        if result.returncode != 0:
+            print(f"pip freeze failed: {result.stderr.strip()}", file=sys.stderr)
+            sys.exit(2)
         return [l.strip() for l in result.stdout.splitlines() if l.strip()]
 
 
@@ -79,6 +148,7 @@ def main():
     parser.add_argument("-r", "--requirements", default=None)
     parser.add_argument("--warn-only", action="store_true", help="log but always exit 0")
     parser.add_argument("--json", dest="as_json", action="store_true")
+    parser.add_argument("--no-osv", action="store_true", help="skip OSV database query (air-gapped builds)")
     args = parser.parse_args()
 
     packages = load_packages(args.requirements)
@@ -100,21 +170,55 @@ def main():
                         "cve": cve,
                     })
 
-    if args.as_json:
-        print(json.dumps({"hits": hits, "count": len(hits)}, indent=2))
-    elif not hits:
-        print(f"{GREEN}✓ piplog-docker-scan: no advisory matches ({len(packages)} packages checked).{RESET}")
-    else:
-        print(f"\n{RED}⚠  piplog-docker-scan: {len(hits)} advisory match(es){RESET}\n" + "="*56)
-        for h in hits:
-            ver_str = f"=={h['version']}" if h["version"] != "unknown" else ""
-            print(f"  {sev_str(h['severity'])}  {h['package']}{ver_str}")
-            print(f"    {h['description']}")
-            if h["cve"]:
-                print(f"    {h['cve']}")
-        print("="*56 + "\n")
+    # OSV query for all packages (includes transitive deps from freeze)
+    osv_hits: dict[tuple[str, str], list[dict]] = {}
+    if not args.no_osv:
+        pkg_pairs = []
+        for spec in packages:
+            name, ver = parse_name_version(spec)
+            if ver:
+                pkg_pairs.append((name, ver))
+        if pkg_pairs:
+            osv_hits = _osv_query(pkg_pairs)
 
-    if hits and not args.warn_only:
+    if args.as_json:
+        osv_json = [
+            {"package": pkg, "version": ver, **v}
+            for (pkg, ver), vulns in osv_hits.items()
+            for v in vulns
+        ]
+        print(json.dumps({"hits": hits, "count": len(hits),
+                          "osv_hits": osv_json, "osv_count": len(osv_json)}, indent=2))
+    else:
+        if not hits:
+            print(f"{GREEN}✓ piplog-docker-scan: no advisory matches ({len(packages)} packages checked).{RESET}")
+        else:
+            print(f"\n{RED}⚠  piplog-docker-scan: {len(hits)} advisory match(es){RESET}\n" + "="*56)
+            for h in hits:
+                ver_str = f"=={h['version']}" if h["version"] != "unknown" else ""
+                print(f"  {sev_str(h['severity'])}  {h['package']}{ver_str}")
+                print(f"    {h['description']}")
+                if h["cve"]:
+                    print(f"    {h['cve']}")
+            print("="*56 + "\n")
+
+        if osv_hits:
+            osv_total = sum(len(v) for v in osv_hits.values())
+            print(f"\n{RED}⚠  OSV matches: {osv_total} vuln(s) across {len(osv_hits)} package version(s){RESET}\n" + "="*56)
+            for (pkg, ver), vulns in sorted(osv_hits.items()):
+                for v in vulns:
+                    fix = f"fix: {v['fixed']}" if v["fixed"] else "no fix available"
+                    print(f"  {sev_str(v['severity'])}  {pkg}=={ver}  {GRAY}{v['id']}{RESET}")
+                    print(f"    {v['summary']}")
+                    if v["cve"]:
+                        print(f"    {v['cve']}  {GRAY}({fix}){RESET}")
+                    else:
+                        print(f"    {GRAY}({fix}){RESET}")
+            print("="*56 + "\n")
+        elif not args.no_osv:
+            print(f"{GREEN}✓ OSV: no matches ({len(packages)} packages checked).{RESET}")
+
+    if (hits or osv_hits) and not args.warn_only:
         sys.exit(1)
     sys.exit(0)
 

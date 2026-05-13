@@ -6,16 +6,23 @@ across all users, all venvs, and flags known-malicious packages at install time.
 ## Install (as root)
 
 ```bash
-sudo bash install.sh
+sudo bash piplog/setup.sh
 ```
 
 This:
+
 - Installs piplog system-wide
-- Creates `/var/lib/piplog/audit.db` (sticky 1777 — all users write, no clobber)
+- Creates `/var/lib/piplog/audit.db` (`root:piplog` 660 — only piplog group members can read/write)
 - Replaces `/usr/local/bin/pip` and `/usr/local/bin/pip3` with the logging shim
 - Backs up the real pip to `/usr/local/bin/.pip-real`
 - Seeds the advisory database with current known-bad packages
 - Sets `PIPLOG_DB` in `/etc/environment`
+
+Add each user whose installs should be logged to the `piplog` group (re-login required):
+
+```bash
+sudo usermod -aG piplog <username>
+```
 
 ## Usage
 
@@ -62,15 +69,14 @@ Use `--json` for machine-readable output.
 ## Environment variables
 
 | Variable | Default | Description |
-|---|---|---|
+| --- | --- | --- |
 | `PIPLOG_DB` | `/var/lib/piplog/audit.db` | Path to SQLite database |
 | `PIPLOG_DISABLE` | unset | Set to `1` to bypass logging |
-| `PIPLOG_REAL_PIP` | `/usr/local/bin/.pip-real` | Path to real pip binary |
 | `PIPLOG_DEBUG` | unset | Set to `1` for shim debug output |
 
 ## Schema
 
-```
+```text
 installs  — one row per pip install invocation
   id, ts, package, version, wheel_hash,
   installer, invoked_by, cwd, argv,
@@ -90,7 +96,7 @@ advisories — known-bad packages
 ## Current advisory list (13.05.2026)
 
 | Package | Bad versions | Severity | Campaign |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | litellm | 1.82.7, 1.82.8 | critical | TeamPCP / Trivy CI compromise |
 | telnyx | 4.87.1, 4.87.2 | high | TeamPCP |
 | lightning | 2.6.2, 2.6.3 | critical | Mini Shai-Hulud |

@@ -9,7 +9,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-REAL_PIP = os.environ.get("PIPLOG_REAL_PIP", "/usr/bin/pip3")
 PIPLOG_ENABLED = os.environ.get("PIPLOG_DISABLE", "").lower() not in ("1", "true", "yes")
 
 
@@ -80,6 +79,8 @@ def _log_installed(pkg_specs: list[str]) -> None:
             except Exception as e:
                 if os.environ.get("PIPLOG_DEBUG"):
                     print(f"[piplog] warning: could not log {name}: {e}", file=sys.stderr)
+
+        _check_osv_batch(pkg_specs)
     except Exception as e:
         if os.environ.get("PIPLOG_DEBUG"):
             print(f"[piplog] logger unavailable: {e}", file=sys.stderr)
@@ -106,6 +107,72 @@ def _check_advisory(name: str, version: str, install_id: int) -> None:
             print(f"{'='*60}\n", file=sys.stderr)
     except Exception:
         pass
+
+
+def _check_osv_batch(pkg_specs: list[str]) -> None:
+    """Batch-query OSV for installed packages and all their transitive deps."""
+    try:
+        import importlib.metadata as meta
+        import re
+        from piplog.osv import query_packages
+        from piplog.db import get_conn
+
+        packages: list[tuple[str, str]] = []
+        seen: set[str] = set()
+
+        def _add(name: str) -> None:
+            name = name.lower()
+            if name in seen:
+                return
+            seen.add(name)
+            try:
+                ver = meta.version(name)
+                packages.append((name, ver))
+                dist = meta.distribution(name)
+                for req in (dist.requires or []):
+                    # Skip environment markers (extras, python_version, etc.)
+                    if ";" in req:
+                        marker = req.split(";", 1)[1]
+                        if "extra ==" in marker:
+                            continue
+                    dep = re.split(r"[><=!~\[; ]", req)[0].strip().lower()
+                    if dep:
+                        _add(dep)
+            except meta.PackageNotFoundError:
+                pass
+
+        for spec in pkg_specs:
+            name = spec.split("==")[0].split(">=")[0].split("<=")[0] \
+                       .split("!=")[0].split("~=")[0].strip()
+            if name and not name.startswith((".", "/")):
+                _add(name)
+
+        if not packages:
+            return
+
+        with get_conn() as conn:
+            hits = query_packages(packages, conn)
+
+        if not hits:
+            return
+
+        print(f"\n{'='*60}", file=sys.stderr)
+        print(f"[piplog] \033[1;31m⚠  OSV VULNERABILITY\033[0m", file=sys.stderr)
+        for (pkg, ver), vulns in sorted(hits.items()):
+            for v in vulns:
+                sev = v["severity"].upper()
+                fix = f"fix: {v['fixed']}" if v["fixed"] else "no fix available"
+                print(f"  [{sev}] {pkg}=={ver}  {v['id']}", file=sys.stderr)
+                print(f"    {v['summary']}", file=sys.stderr)
+                if v["cve"]:
+                    print(f"    {v['cve']}  ({fix})", file=sys.stderr)
+                else:
+                    print(f"    ({fix})", file=sys.stderr)
+        print(f"  run: piplog osv-scan", file=sys.stderr)
+        print(f"{'='*60}\n", file=sys.stderr)
+    except Exception as e:
+        if os.environ.get("PIPLOG_DEBUG"):
+            print(f"[piplog] OSV check failed: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":
