@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .db import get_conn, init_db, DB_PATH
+from .osv import query_packages, query_preferred, _pip_audit_exe
 
 
 # ── formatting helpers ────────────────────────────────────────────────────────
@@ -291,10 +292,14 @@ def cmd_docker_scan(args):
             if line and not line.startswith("#") and not line.startswith("-"):
                 packages.append(line)
     else:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "freeze"],
-            capture_output=True, text=True, timeout=30
-        )
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "freeze"],
+                capture_output=True, text=True, timeout=30
+            )
+        except subprocess.TimeoutExpired:
+            print("pip freeze timed out", file=sys.stderr)
+            sys.exit(1)
         if result.returncode != 0:
             print(f"pip freeze failed: {result.stderr.strip()}", file=sys.stderr)
             sys.exit(1)
@@ -330,7 +335,6 @@ def cmd_docker_scan(args):
         print(f"{_col('✓', GREEN)} piplog docker-scan: no advisory matches ({len(packages)} packages checked).")
 
     # OSV query — covers transitive deps when using pip freeze
-    from .osv import query_packages
     pkg_pairs = []
     for spec in packages:
         name_ver = spec.split("==")
@@ -364,8 +368,6 @@ def cmd_docker_scan(args):
 
 def _cmd_scan_osv(args) -> None:
     """OSV scan portion of `piplog scan --osv` and `piplog osv-scan`."""
-    from .osv import query_preferred, _pip_audit_exe
-
     backend = f"pip-audit ({_pip_audit_exe()})" if _pip_audit_exe() else "osv.dev client"
     print(f"{GRAY}scanning via {backend}…{RESET}")
 

@@ -48,7 +48,13 @@ def _osv_query(packages: list[tuple[str, str]]) -> dict[tuple[str, str], list[di
         except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
             print(f"[piplog-docker-scan] OSV query failed: {e}", file=sys.stderr)
             continue
-        for (name, ver), result in zip(chunk, data.get("results", [])):
+        api_results = data.get("results", [])
+        if len(api_results) != len(chunk):
+            print(
+                f"[piplog-docker-scan] OSV batch: expected {len(chunk)} results, got {len(api_results)}",
+                file=sys.stderr,
+            )
+        for (name, ver), result in zip(chunk, api_results):
             ids = [v["id"] for v in result.get("vulns", []) if v.get("id")]
             if ids:
                 pkg_ids[(name, ver)] = ids
@@ -153,10 +159,14 @@ def load_packages(req_file=None):
                 lines.append(line)
         return lines
     else:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "freeze"],
-            capture_output=True, text=True, timeout=30
-        )
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "freeze"],
+                capture_output=True, text=True, timeout=30
+            )
+        except subprocess.TimeoutExpired:
+            print("pip freeze timed out", file=sys.stderr)
+            sys.exit(2)
         if result.returncode != 0:
             print(f"pip freeze failed: {result.stderr.strip()}", file=sys.stderr)
             sys.exit(2)

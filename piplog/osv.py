@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import urllib.request
 import urllib.error
@@ -144,7 +145,13 @@ def _fetch_osv_batch(
         except (urllib.error.URLError, OSError, json.JSONDecodeError):
             continue
 
-        for (name, version), result in zip(chunk, data.get("results", [])):
+        api_results = data.get("results", [])
+        if len(api_results) != len(chunk) and os.environ.get("PIPLOG_DEBUG"):
+            print(
+                f"[piplog] OSV batch: expected {len(chunk)} results, got {len(api_results)}",
+                file=sys.stderr,
+            )
+        for (name, version), result in zip(chunk, api_results):
             ids = [v["id"] for v in result.get("vulns", []) if v.get("id")]
             if ids:
                 results[(name, version)] = ids
@@ -272,10 +279,13 @@ def _query_via_pip_audit(
             for name, version in packages:
                 f.write(f"{name}=={version}\n")
 
-        result = subprocess.run(
-            [exe, "--format=json", "--no-deps", "-r", req_path],
-            capture_output=True, text=True, timeout=120,
-        )
+        try:
+            result = subprocess.run(
+                [exe, "--format=json", "--no-deps", "-r", req_path],
+                capture_output=True, text=True, timeout=120,
+            )
+        except subprocess.TimeoutExpired:
+            return None
     finally:
         os.unlink(req_path)
 

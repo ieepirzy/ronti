@@ -5,6 +5,8 @@ Passes all args through to the real pip, then logs any installs.
 Must be fast and non-blocking on non-install commands.
 """
 import os
+import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -13,16 +15,23 @@ PIPLOG_ENABLED = os.environ.get("PIPLOG_DISABLE", "").lower() not in ("1", "true
 
 
 def _find_real_pip() -> str:
-    candidates = [
-        "/usr/bin/pip3",
-        "/usr/bin/pip",
-        "/usr/local/bin/.pip-real",
-    ]
-    for c in candidates:
-        p = Path(c)
-        if p.exists() and p.resolve() != Path(__file__).resolve():
-            return c
-    return "pip3"
+    real = shutil.which("pip3") or shutil.which("pip")
+    if not real:
+        print("[piplog] cannot find pip3 or pip on PATH", file=sys.stderr)
+        sys.exit(1)
+    # Avoid pointing back at ourselves
+    if Path(real).resolve() == Path(__file__).resolve():
+        backup = "/usr/local/bin/.pip-real"
+        if Path(backup).exists():
+            return backup
+        print("[piplog] shim loop detected and no .pip-real backup found", file=sys.stderr)
+        sys.exit(1)
+    return real
+
+
+def _pkg_name(spec: str) -> str:
+    """Extract bare package name from a pip spec string."""
+    return re.split(r"[><=!~\[@; ]", spec)[0].strip().lower()
 
 
 def _parse_installs(args: list[str]) -> list[str]:
@@ -31,11 +40,21 @@ def _parse_installs(args: list[str]) -> list[str]:
         return []
     packages = []
     skip_next = False
-    flags_with_args = {"-r", "--requirement", "-c", "--constraint",
-                       "-t", "--target", "--root", "--prefix",
-                       "-i", "--index-url", "--extra-index-url",
-                       "--trusted-host", "--python-version",
-                       "-e", "--editable"}
+    flags_with_args = {
+        "-r", "--requirement", "-c", "--constraint",
+        "-t", "--target", "--root", "--prefix",
+        "-i", "--index-url", "--extra-index-url",
+        "--trusted-host", "--python-version",
+        "-e", "--editable",
+        "-f", "--find-links",
+        "--cache-dir", "--log",
+        "--progress-bar", "--timeout", "--retries",
+        "--proxy", "--cert", "--client-cert",
+        "--hash", "-C", "--config-settings",
+        "--global-option", "--install-option",
+        "--platform", "--abi", "--implementation",
+        "--only-binary", "--no-binary",
+    }
     for arg in args[1:]:
         if skip_next:
             skip_next = False
@@ -113,7 +132,7 @@ def _log_installed(pkg_specs: list[str]) -> None:
         from piplog.logger import log_install
 
         for spec in pkg_specs:
-            name = spec.split("==")[0].split(">=")[0].split("<=")[0].split("!=")[0].split("~=")[0].strip()
+            name = _pkg_name(spec)
             if not name or name.startswith(".") or name.startswith("/"):
                 continue
             try:
@@ -188,8 +207,7 @@ def _check_osv_batch(pkg_specs: list[str]) -> None:
                 pass
 
         for spec in pkg_specs:
-            name = spec.split("==")[0].split(">=")[0].split("<=")[0] \
-                       .split("!=")[0].split("~=")[0].strip()
+            name = _pkg_name(spec)
             if name and not name.startswith((".", "/")):
                 _add(name)
 

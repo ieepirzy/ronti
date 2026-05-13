@@ -21,15 +21,19 @@ def _install_hook():
                 version = meta.version(name)
                 from piplog.logger import log_install
                 from piplog.db import get_conn
-                install_id = log_install(name, version)
+                log_install(name, version)
                 with get_conn() as conn:
                     hits = conn.execute(
-                        "SELECT severity, description FROM advisories WHERE package=? AND (bad_version=? OR bad_version IS NULL)",
+                        "SELECT severity, description, cve FROM advisories"
+                        " WHERE package=? AND (bad_version=? OR bad_version IS NULL)",
                         (name.lower(), version)
                     ).fetchall()
                 if hits:
                     for h in hits:
-                        print(f"[piplog] ⚠  {name}=={version} [{h['severity'].upper()}]: {h['description']}", file=sys.stderr)
+                        msg = f"[piplog] ⚠  {name}=={version} [{h['severity'].upper()}]: {h['description']}"
+                        if h["cve"]:
+                            msg += f"  ({h['cve']})"
+                        print(msg, file=sys.stderr)
             except Exception:
                 pass
             return result
