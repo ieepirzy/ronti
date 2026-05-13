@@ -240,45 +240,139 @@ def cmd_inject_venv(args):
     print(f"Injected piplog hook → {dest}")
 
 
-def cmd_install_shim(args):
-    """Install the pip shim system-wide (requires root)."""
-    if os.geteuid() != 0:
-        print("install-shim requires root. Run with sudo.")
-        sys.exit(1)
-
+def _install_shim() -> None:
+    """Copy the pip shim to /usr/local/bin/pip and pip3. Must run as root."""
     real_pip = shutil.which("pip3") or shutil.which("pip")
     if not real_pip:
         print("Could not find pip3 or pip on PATH.")
         sys.exit(1)
 
-    shim_src = Path(__file__).parent / "shim.py"
+    shim_src  = Path(__file__).parent / "shim.py"
     target    = Path("/usr/local/bin/pip")
+    target3   = Path("/usr/local/bin/pip3")
     real_dest = Path("/usr/local/bin/.pip-real")
 
-    # back up real pip (skip if already backed up to avoid overwriting the shim itself)
     if not real_dest.exists():
         shutil.copy(real_pip, real_dest)
     shutil.copy(shim_src, target)
     target.chmod(0o755)
-
-    # also cover pip3
-    target3 = Path("/usr/local/bin/pip3")
     shutil.copy(shim_src, target3)
     target3.chmod(0o755)
 
-    # ensure piplog itself is importable system-wide
-    r = subprocess.run([sys.executable, "-m", "pip", "install", "-e",
-                        str(Path(__file__).parent.parent), "--quiet"], check=False)
-    if r.returncode != 0:
-        print("Warning: failed to install piplog system-wide; shim may not be able to import it.", file=sys.stderr)
+    print(f"  pip shim: {target} + {target3}")
+    print(f"  real pip backed up: {real_dest}")
 
-    print(f"Shim installed: {target} + {target3}")
-    print(f"Real pip backed up: {real_dest}")
-    print(f"DB will be written to: {DB_PATH}")
+
+def cmd_install_shim(args):
+    """Install the pip shim system-wide (requires root). Non-interactive."""
+    if os.geteuid() != 0:
+        print("install-shim requires root. Run with sudo.")
+        sys.exit(1)
+    _install_shim()
+    init_db()
+    print(f"  DB: {DB_PATH}")
+
+
+def _ask(prompt: str) -> bool:
+    """Prompt Y/n and return True for yes. Assumes isatty() was already checked."""
+    return input(prompt).strip().lower() not in ("n", "no")
+
+
+def cmd_setup(args):
+    """Full system setup: DB directory, group, pip shim, environment. Requires root."""
+    if os.geteuid() != 0:
+        print("setup requires root. Run with sudo.")
+        sys.exit(1)
+
+    # Non-interactive when: flag passed, no TTY (Docker/CI/pipe), or explicit flag
+    interactive = not getattr(args, "non_interactive", False) and sys.stdin.isatty()
+
+    print(f"\npiplog setup\n{_hr()}")
+    pending: list[str] = []
+
+    # ── 1. piplog group ───────────────────────────────────────────────────────
+    import grp
+    try:
+        grp.getgrnam("piplog")
+        print("  group piplog: already exists")
+    except KeyError:
+        subprocess.run(["groupadd", "piplog"], check=True)
+        print("  created group: piplog")
+
+    # ── 2. DB directory ───────────────────────────────────────────────────────
+    db_dir = DB_PATH.parent
+    already = db_dir.exists() and oct(db_dir.stat().st_mode)[-4:] == "2775"
+    db_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["chown", "root:piplog", str(db_dir)], check=True)
+    subprocess.run(["chmod", "2775", str(db_dir)], check=True)
+    label = "already configured" if already else "created"
+    print(f"  DB dir: {db_dir}  ({label}, root:piplog 2775)")
+
+    # ── 3. Database ───────────────────────────────────────────────────────────
+    init_db()
+    if DB_PATH.exists():
+        subprocess.run(["chown", "root:piplog", str(DB_PATH)], check=True)
+        subprocess.run(["chmod", "660", str(DB_PATH)], check=True)
+    print(f"  DB: {DB_PATH}  (root:piplog 660)")
+
+    # ── 4. pip shim ───────────────────────────────────────────────────────────
+    shim_done = Path("/usr/local/bin/.pip-real").exists()
+    if shim_done:
+        print("  pip shim: already installed")
+    elif not interactive or _ask("\nInstall pip shim to intercept all pip installs system-wide? [Y/n] "):
+        _install_shim()
+    else:
+        pending.append("pip shim:      sudo piplog install-shim")
+
+    # ── 5. /etc/environment ───────────────────────────────────────────────────
+    env_file = Path("/etc/environment")
+    if env_file.exists() and "PIPLOG_DB" in env_file.read_text():
+        print("  /etc/environment: PIPLOG_DB already set")
+    else:
+        with env_file.open("a") as f:
+            f.write(f"\nPIPLOG_DB={DB_PATH}\n")
+        print(f"  /etc/environment: added PIPLOG_DB={DB_PATH}")
+
+    # ── 6. User group membership ──────────────────────────────────────────────
+    sudo_user = os.environ.get("SUDO_USER", "")
+    if not sudo_user:
+        print("\n  To grant access: sudo usermod -aG piplog <username>  (then re-login)")
+    else:
+        try:
+            already_member = sudo_user in grp.getgrnam("piplog").gr_mem
+        except KeyError:
+            already_member = False
+
+        if already_member:
+            print(f"  '{sudo_user}': already in piplog group")
+        elif not interactive or _ask(f"\nAdd '{sudo_user}' to the piplog group? [Y/n] "):
+            subprocess.run(["usermod", "-aG", "piplog", sudo_user], check=True)
+            print(f"  '{sudo_user}' added to piplog group.")
+            if not interactive:
+                pending.append(f"re-login:      log out and back in as {sudo_user} (group change)")
+            elif _ask(f"Switch to a new login session as '{sudo_user}' now? [Y/n] "):
+                print("\nSwitching session — run 'exit' to return to root.\n")
+                os.execvp("su", ["su", "-", sudo_user])
+            else:
+                pending.append(f"re-login:      log out and back in as {sudo_user} (group change)")
+        else:
+            pending.append(f"add to group:  sudo usermod -aG piplog {sudo_user}  (then re-login)")
+
+    # ── Summary ───────────────────────────────────────────────────────────────
+    print(f"\n{_hr()}")
+    if pending:
+        print(f"{_col('  Finish setup by running:', YELLOW)}")
+        for step in pending:
+            print(f"    {step}")
+        print(f"\n  Or re-run `sudo piplog setup` to complete interactively.")
+    else:
+        print(f"{_col('  ✓ Setup complete.', GREEN)}")
+        print(f"  Test: pip install requests  →  piplog scan")
+    print()
 
 
 def cmd_docker_scan(args):
-    """Standalone scan for use in Dockerfiles. Reads requirements file or pip freeze."""
+    """Scan requirements file or pip freeze via OSV. For use in Dockerfiles."""
     init_db()
 
     packages = []
@@ -305,36 +399,6 @@ def cmd_docker_scan(args):
             sys.exit(1)
         packages = [l.strip() for l in result.stdout.splitlines() if l.strip()]
 
-    with get_conn() as conn:
-        advisories = conn.execute("SELECT package, bad_version, severity, description, cve FROM advisories").fetchall()
-
-    adv_map: dict[str, list] = {}
-    for a in advisories:
-        adv_map.setdefault(a["package"].lower(), []).append(a)
-
-    hits = []
-    for spec in packages:
-        name_ver = spec.split("==")
-        name = name_ver[0].lower().strip()
-        ver  = name_ver[1].strip() if len(name_ver) > 1 else None
-        if name in adv_map:
-            for adv in adv_map[name]:
-                if adv["bad_version"] is None or adv["bad_version"] == ver:
-                    hits.append((name, ver, adv))
-
-    if hits:
-        print(f"\n{_col('⚠  piplog docker-scan:', RED)} {len(hits)} advisory match(es)\n{_hr()}")
-        for name, ver, adv in hits:
-            ver_str = f"=={ver}" if ver else ""
-            print(f"  {_sev(adv['severity'])}  {_col(name, BOLD)}{ver_str}")
-            print(f"    {adv['description']}")
-            if adv["cve"]:
-                print(f"    {_col(adv['cve'], CYAN)}")
-        print()
-    else:
-        print(f"{_col('✓', GREEN)} piplog docker-scan: no advisory matches ({len(packages)} packages checked).")
-
-    # OSV query — covers transitive deps when using pip freeze
     pkg_pairs = []
     for spec in packages:
         name_ver = spec.split("==")
@@ -350,7 +414,7 @@ def cmd_docker_scan(args):
 
     if osv_hits:
         osv_total = sum(len(v) for v in osv_hits.values())
-        print(f"\n{_col('⚠  OSV matches:', RED)} {osv_total} vuln(s) across {len(osv_hits)} package version(s)\n{_hr()}")
+        print(f"\n{_col('⚠  OSV:', RED)} {osv_total} vuln(s) across {len(osv_hits)} package version(s)\n{_hr()}")
         for (pkg, ver), vulns in sorted(osv_hits.items()):
             for v in vulns:
                 fix = f"fix: {v['fixed']}" if v["fixed"] else "no fix available"
@@ -359,11 +423,12 @@ def cmd_docker_scan(args):
                 ref = _col(v['cve'], CYAN) if v['cve'] else v['id']
                 print(f"    {ref}  {GRAY}({fix}){RESET}")
         print()
-    elif not getattr(args, "no_osv", False):
-        print(f"{_col('✓', GREEN)} OSV: no matches ({len(pkg_pairs)} versioned packages checked).")
-
-    if hits or osv_hits:
         sys.exit(1)
+    else:
+        msg = f"({len(pkg_pairs)} versioned packages checked)"
+        if getattr(args, "no_osv", False):
+            msg = f"({len(packages)} packages checked, OSV skipped)"
+        print(f"{_col('✓', GREEN)} piplog docker-scan: no vulnerabilities found {msg}.")
 
 
 def _cmd_scan_osv(args) -> None:
@@ -452,8 +517,13 @@ def main():
     p_iv = sub.add_parser("inject-venv", help="install hook into a specific venv")
     p_iv.add_argument("venv")
 
+    # setup
+    p_setup = sub.add_parser("setup", help="full system setup: DB, group, shim (run as root)")
+    p_setup.add_argument("--non-interactive", action="store_true",
+                         help="skip Y/N prompts; add SUDO_USER to piplog group automatically")
+
     # install-shim
-    sub.add_parser("install-shim", help="install system-wide pip shim (run as root)")
+    sub.add_parser("install-shim", help="install system-wide pip shim only (run as root)")
 
     # docker-scan
     p_ds = sub.add_parser("docker-scan", help="scan requirements/freeze for advisories, exit 1 on hit")
@@ -473,6 +543,7 @@ def main():
         "repos":         cmd_repos,
         "advisory":      cmd_advisory,
         "inject-venv":   cmd_inject_venv,
+        "setup":         cmd_setup,
         "install-shim":  cmd_install_shim,
         "docker-scan":   cmd_docker_scan,
         "osv-scan":      cmd_osv_scan,

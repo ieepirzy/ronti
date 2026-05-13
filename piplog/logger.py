@@ -104,7 +104,7 @@ def log_install(package: str, version: str) -> int:
         install_id = cur.lastrowid
         for dep in deps:
             conn.execute(
-                "INSERT INTO deps (install_id, dep_name, dep_version, dep_extras) VALUES (?,?,?,?)",
+                "INSERT OR IGNORE INTO deps (install_id, dep_name, dep_version, dep_extras) VALUES (?,?,?,?)",
                 (install_id, dep["name"], dep.get("version"), dep.get("extras"))
             )
         conn.commit()

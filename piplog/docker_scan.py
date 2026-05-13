@@ -119,21 +119,6 @@ def _parse_osv_vuln(v: dict) -> dict:
     return {"id": v.get("id", ""), "cve": cve, "summary": v.get("summary", ""),
             "severity": severity or "unknown", "fixed": fixed}
 
-# ── embedded advisory list ────────────────────────────────────────────────────
-# Keep this in sync with piplog/db.py BUILTIN_ADVISORIES.
-# Format: (package, bad_version_or_None, severity, description, cve_or_None)
-ADVISORIES = [
-    ("litellm",        "1.82.7",  "critical", "TeamPCP credential stealer via Trivy CI compromise",            "CVE-2026-33634"),
-    ("litellm",        "1.82.8",  "critical", "TeamPCP credential stealer, .pth persistence variant",          "CVE-2026-33634"),
-    ("telnyx",         "4.87.1",  "high",     "TeamPCP backdoor injected via stolen PyPI token",               None),
-    ("telnyx",         "4.87.2",  "high",     "TeamPCP backdoor injected via stolen PyPI token",               None),
-    ("lightning",      "2.6.2",   "critical", "Mini Shai-Hulud: credential stealer + JS payload on import",   None),
-    ("lightning",      "2.6.3",   "critical", "Mini Shai-Hulud: credential stealer + JS payload on import",   None),
-    ("mistralai",      "2.4.6",   "critical", "Shai-Hulud: imports transformers.pyz, exfils to 83.142.209.194", None),
-    ("guardrails-ai",  None,      "high",     "Shai-Hulud wave: verify version against advisories",            None),
-    ("dydx-v4-client", None,      "high",     "Wallet stealer + RAT, verify installed version",                None),
-]
-
 RESET  = "\033[0m"
 RED    = "\033[1;31m"
 YELLOW = "\033[1;33m"
@@ -183,33 +168,15 @@ def parse_name_version(spec):
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="piplog standalone advisory scanner")
+    parser = argparse.ArgumentParser(description="piplog standalone OSV scanner")
     parser.add_argument("-r", "--requirements", default=None)
     parser.add_argument("--warn-only", action="store_true", help="log but always exit 0")
     parser.add_argument("--json", dest="as_json", action="store_true")
-    parser.add_argument("--no-osv", action="store_true", help="skip OSV database query (air-gapped builds)")
+    parser.add_argument("--no-osv", action="store_true", help="skip OSV query (air-gapped builds)")
     args = parser.parse_args()
 
     packages = load_packages(args.requirements)
-    adv_index = {}
-    for pkg, ver, sev, desc, cve in ADVISORIES:
-        adv_index.setdefault(pkg.lower(), []).append((ver, sev, desc, cve))
 
-    hits = []
-    for spec in packages:
-        name, installed_ver = parse_name_version(spec)
-        if name in adv_index:
-            for bad_ver, sev, desc, cve in adv_index[name]:
-                if bad_ver is None or bad_ver == installed_ver:
-                    hits.append({
-                        "package": name,
-                        "version": installed_ver or "unknown",
-                        "severity": sev,
-                        "description": desc,
-                        "cve": cve,
-                    })
-
-    # OSV query for all packages (includes transitive deps from freeze)
     osv_hits: dict[tuple[str, str], list[dict]] = {}
     if not args.no_osv:
         pkg_pairs = []
@@ -226,24 +193,11 @@ def main():
             for (pkg, ver), vulns in osv_hits.items()
             for v in vulns
         ]
-        print(json.dumps({"hits": hits, "count": len(hits),
-                          "osv_hits": osv_json, "osv_count": len(osv_json)}, indent=2))
+        print(json.dumps({"osv_hits": osv_json, "osv_count": len(osv_json)}, indent=2))
     else:
-        if not hits:
-            print(f"{GREEN}✓ piplog-docker-scan: no advisory matches ({len(packages)} packages checked).{RESET}")
-        else:
-            print(f"\n{RED}⚠  piplog-docker-scan: {len(hits)} advisory match(es){RESET}\n" + "="*56)
-            for h in hits:
-                ver_str = f"=={h['version']}" if h["version"] != "unknown" else ""
-                print(f"  {sev_str(h['severity'])}  {h['package']}{ver_str}")
-                print(f"    {h['description']}")
-                if h["cve"]:
-                    print(f"    {h['cve']}")
-            print("="*56 + "\n")
-
         if osv_hits:
             osv_total = sum(len(v) for v in osv_hits.values())
-            print(f"\n{RED}⚠  OSV matches: {osv_total} vuln(s) across {len(osv_hits)} package version(s){RESET}\n" + "="*56)
+            print(f"\n{RED}⚠  OSV: {osv_total} vuln(s) across {len(osv_hits)} package version(s){RESET}\n" + "="*56)
             for (pkg, ver), vulns in sorted(osv_hits.items()):
                 for v in vulns:
                     fix = f"fix: {v['fixed']}" if v["fixed"] else "no fix available"
@@ -257,7 +211,7 @@ def main():
         elif not args.no_osv:
             print(f"{GREEN}✓ OSV: no matches ({len(packages)} packages checked).{RESET}")
 
-    if (hits or osv_hits) and not args.warn_only:
+    if osv_hits and not args.warn_only:
         sys.exit(1)
     sys.exit(0)
 
