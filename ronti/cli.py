@@ -63,7 +63,7 @@ def cmd_list(args):
         print("No installs recorded.")
         return
 
-    print(f"\n{_col('piplog', BOLD)} — {len(rows)} most recent installs\n{_hr()}")
+    print(f"\n{_col('rönti', BOLD)} — {len(rows)} most recent installs\n{_hr()}")
     for r in rows:
         venv = f" {GRAY}[{Path(r['venv_path']).name}]{RESET}" if r["venv_path"] else f" {GRAY}[global]{RESET}"
         user = f"{GRAY}{r['username']}{RESET}" if r["username"] else ""
@@ -237,7 +237,7 @@ def cmd_inject_venv(args):
     dest = site / "sitecustomize.py"
     src  = Path(__file__).parent / "sitecustomize.py"
     shutil.copy(src, dest)
-    print(f"Injected piplog hook → {dest}")
+    print(f"Injected rönti hook → {dest}")
 
 
 def _install_shim() -> None:
@@ -287,33 +287,33 @@ def cmd_setup(args):
     # Non-interactive when: flag passed, no TTY (Docker/CI/pipe), or explicit flag
     interactive = not getattr(args, "non_interactive", False) and sys.stdin.isatty()
 
-    print(f"\npiplog setup\n{_hr()}")
+    print(f"\nronti setup\n{_hr()}")
     pending: list[str] = []
 
-    # ── 1. piplog group ───────────────────────────────────────────────────────
+    # ── 1. ronti group ───────────────────────────────────────────────────────
     import grp
     try:
-        grp.getgrnam("piplog")
-        print("  group piplog: already exists")
+        grp.getgrnam("ronti")
+        print("  group ronti: already exists")
     except KeyError:
-        subprocess.run(["groupadd", "piplog"], check=True)
-        print("  created group: piplog")
+        subprocess.run(["groupadd", "ronti"], check=True)
+        print("  created group: ronti")
 
     # ── 2. DB directory ───────────────────────────────────────────────────────
     db_dir = DB_PATH.parent
     already = db_dir.exists() and oct(db_dir.stat().st_mode)[-4:] == "2775"
     db_dir.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["chown", "root:piplog", str(db_dir)], check=True)
+    subprocess.run(["chown", "root:ronti", str(db_dir)], check=True)
     subprocess.run(["chmod", "2775", str(db_dir)], check=True)
     label = "already configured" if already else "created"
-    print(f"  DB dir: {db_dir}  ({label}, root:piplog 2775)")
+    print(f"  DB dir: {db_dir}  ({label}, root:ronti 2775)")
 
     # ── 3. Database ───────────────────────────────────────────────────────────
     init_db()
     if DB_PATH.exists():
-        subprocess.run(["chown", "root:piplog", str(DB_PATH)], check=True)
+        subprocess.run(["chown", "root:ronti", str(DB_PATH)], check=True)
         subprocess.run(["chmod", "660", str(DB_PATH)], check=True)
-    print(f"  DB: {DB_PATH}  (root:piplog 660)")
+    print(f"  DB: {DB_PATH}  (root:ronti 660)")
 
     # ── 4. pip shim ───────────────────────────────────────────────────────────
     shim_done = Path("/usr/local/bin/.pip-real").exists()
@@ -322,32 +322,32 @@ def cmd_setup(args):
     elif not interactive or _ask("\nInstall pip shim to intercept all pip installs system-wide? [Y/n] "):
         _install_shim()
     else:
-        pending.append("pip shim:      sudo piplog install-shim")
+        pending.append("pip shim:      sudo ronti install-shim")
 
     # ── 5. /etc/environment ───────────────────────────────────────────────────
     env_file = Path("/etc/environment")
-    if env_file.exists() and "PIPLOG_DB" in env_file.read_text():
-        print("  /etc/environment: PIPLOG_DB already set")
+    if env_file.exists() and "RONTI_DB" in env_file.read_text():
+        print("  /etc/environment: RONTI_DB already set")
     else:
         with env_file.open("a") as f:
-            f.write(f"\nPIPLOG_DB={DB_PATH}\n")
-        print(f"  /etc/environment: added PIPLOG_DB={DB_PATH}")
+            f.write(f"\nRONTI_DB={DB_PATH}\n")
+        print(f"  /etc/environment: added RONTI_DB={DB_PATH}")
 
     # ── 6. User group membership ──────────────────────────────────────────────
     sudo_user = os.environ.get("SUDO_USER", "")
     if not sudo_user:
-        print("\n  To grant access: sudo usermod -aG piplog <username>  (then re-login)")
+        print("\n  To grant access: sudo usermod -aG ronti <username>  (then re-login)")
     else:
         try:
-            already_member = sudo_user in grp.getgrnam("piplog").gr_mem
+            already_member = sudo_user in grp.getgrnam("ronti").gr_mem
         except KeyError:
             already_member = False
 
         if already_member:
-            print(f"  '{sudo_user}': already in piplog group")
-        elif not interactive or _ask(f"\nAdd '{sudo_user}' to the piplog group? [Y/n] "):
-            subprocess.run(["usermod", "-aG", "piplog", sudo_user], check=True)
-            print(f"  '{sudo_user}' added to piplog group.")
+            print(f"  '{sudo_user}': already in ronti group")
+        elif not interactive or _ask(f"\nAdd '{sudo_user}' to the ronti group? [Y/n] "):
+            subprocess.run(["usermod", "-aG", "ronti", sudo_user], check=True)
+            print(f"  '{sudo_user}' added to ronti group.")
             if not interactive:
                 pending.append(f"re-login:      log out and back in as {sudo_user} (group change)")
             elif _ask(f"Switch to a new login session as '{sudo_user}' now? [Y/n] "):
@@ -356,7 +356,7 @@ def cmd_setup(args):
             else:
                 pending.append(f"re-login:      log out and back in as {sudo_user} (group change)")
         else:
-            pending.append(f"add to group:  sudo usermod -aG piplog {sudo_user}  (then re-login)")
+            pending.append(f"add to group:  sudo usermod -aG ronti {sudo_user}  (then re-login)")
 
     # ── Summary ───────────────────────────────────────────────────────────────
     print(f"\n{_hr()}")
@@ -364,10 +364,10 @@ def cmd_setup(args):
         print(f"{_col('  Finish setup by running:', YELLOW)}")
         for step in pending:
             print(f"    {step}")
-        print(f"\n  Or re-run `sudo piplog setup` to complete interactively.")
+        print(f"\n  Or re-run `sudo ronti setup` to complete interactively.")
     else:
         print(f"{_col('  ✓ Setup complete.', GREEN)}")
-        print(f"  Test: pip install requests  →  piplog scan")
+        print(f"  Test: pip install requests  →  ronti scan")
     print()
 
 
@@ -429,11 +429,11 @@ def cmd_docker_scan(args):
         msg = f"({len(pkg_pairs)} versioned packages checked)"
         if getattr(args, "no_osv", False):
             msg = f"({len(packages)} packages checked, OSV skipped)"
-        print(f"{_col('✓', GREEN)} piplog docker-scan: no vulnerabilities found {msg}.")
+        print(f"{_col('✓', GREEN)} rönti docker-scan: no vulnerabilities found {msg}.")
 
 
 def _cmd_scan_osv(args) -> None:
-    """OSV scan portion of `piplog scan --osv` and `piplog osv-scan`."""
+    """OSV scan portion of `ronti scan --osv` and `ronti osv-scan`."""
     backend = f"pip-audit ({_pip_audit_exe()})" if _pip_audit_exe() else "osv.dev client"
     print(f"{GRAY}scanning via {backend}…{RESET}")
 
@@ -478,7 +478,7 @@ def cmd_osv_scan(args) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        prog="piplog",
+        prog="ronti",
         description="pip install audit logger"
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -522,7 +522,7 @@ def main():
     # setup
     p_setup = sub.add_parser("setup", help="full system setup: DB, group, shim (run as root)")
     p_setup.add_argument("--non-interactive", action="store_true",
-                         help="skip Y/N prompts; add SUDO_USER to piplog group automatically")
+                         help="skip Y/N prompts; add SUDO_USER to ronti group automatically")
 
     # install-shim
     sub.add_parser("install-shim", help="install system-wide pip shim only (run as root)")

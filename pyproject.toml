@@ -3,16 +3,16 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "piplog"
+name = "ronti"
 version = "0.1.0"
-description = "System-wide pip install audit logger with advisory scanning"
+description = "System-wide pip install audit logger with OSV vulnerability scanning"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 dependencies = []
 
 [project.scripts]
-piplog = "piplog.cli:main"
+ronti = "ronti.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["piplog*"]
+include = ["ronti*"]

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-piplog pip shim — installed at /usr/local/bin/pip (and pip3).
+rönti pip shim — installed at /usr/local/bin/pip (and pip3).
 Passes all args through to the real pip, then logs any installs.
 Must be fast and non-blocking on non-install commands.
 """
@@ -11,20 +11,20 @@ import subprocess
 import sys
 from pathlib import Path
 
-PIPLOG_ENABLED = os.environ.get("PIPLOG_DISABLE", "").lower() not in ("1", "true", "yes")
+PIPLOG_ENABLED = os.environ.get("RONTI_DISABLE", "").lower() not in ("1", "true", "yes")
 
 
 def _find_real_pip() -> str:
     real = shutil.which("pip3") or shutil.which("pip")
     if not real:
-        print("[piplog] cannot find pip3 or pip on PATH", file=sys.stderr)
+        print("[rönti] cannot find pip3 or pip on PATH", file=sys.stderr)
         sys.exit(1)
     # Avoid pointing back at ourselves
     if Path(real).resolve() == Path(__file__).resolve():
         backup = "/usr/local/bin/.pip-real"
         if Path(backup).exists():
             return backup
-        print("[piplog] shim loop detected and no .pip-real backup found", file=sys.stderr)
+        print("[rönti] shim loop detected and no .pip-real backup found", file=sys.stderr)
         sys.exit(1)
     return real
 
@@ -88,8 +88,8 @@ def main() -> None:
 def _pre_check_osv(pkg_specs: list[str]) -> None:
     """Query OSV for explicitly pinned packages before pip runs."""
     try:
-        from piplog.db import get_conn, init_db
-        from piplog.osv import query_packages
+        from ronti.db import get_conn, init_db
+        from ronti.osv import query_packages
 
         packages = []
         for spec in pkg_specs:
@@ -111,7 +111,7 @@ def _pre_check_osv(pkg_specs: list[str]) -> None:
             return
 
         print(f"\n{'='*60}", file=sys.stderr)
-        print(f"[piplog] \033[1;31m⚠  OSV: vulnerable version pinned\033[0m", file=sys.stderr)
+        print(f"[rönti] \033[1;31m⚠  OSV: vulnerable version pinned\033[0m", file=sys.stderr)
         for (pkg, ver), vulns in sorted(hits.items()):
             for v in vulns:
                 sev = v["severity"].upper()
@@ -119,17 +119,17 @@ def _pre_check_osv(pkg_specs: list[str]) -> None:
                 print(f"  [{sev}] {pkg}=={ver}: {v['summary']}", file=sys.stderr)
                 ref = v["cve"] or v["id"]
                 print(f"          {ref}  ({fix})", file=sys.stderr)
-        print(f"  proceeding with install — run: piplog osv-scan", file=sys.stderr)
+        print(f"  proceeding with install — run: ronti osv-scan", file=sys.stderr)
         print(f"{'='*60}\n", file=sys.stderr)
     except Exception as e:
-        if os.environ.get("PIPLOG_DEBUG"):
-            print(f"[piplog] pre-install OSV check failed: {e}", file=sys.stderr)
+        if os.environ.get("RONTI_DEBUG"):
+            print(f"[rönti] pre-install OSV check failed: {e}", file=sys.stderr)
 
 
 def _log_installed(pkg_specs: list[str]) -> None:
     try:
         import importlib.metadata as meta
-        from piplog.logger import log_install
+        from ronti.logger import log_install
 
         for spec in pkg_specs:
             name = _pkg_name(spec)
@@ -142,18 +142,18 @@ def _log_installed(pkg_specs: list[str]) -> None:
             except meta.PackageNotFoundError:
                 pass
             except Exception as e:
-                if os.environ.get("PIPLOG_DEBUG"):
-                    print(f"[piplog] warning: could not log {name}: {e}", file=sys.stderr)
+                if os.environ.get("RONTI_DEBUG"):
+                    print(f"[rönti] warning: could not log {name}: {e}", file=sys.stderr)
 
         _check_osv_batch(pkg_specs)
     except Exception as e:
-        if os.environ.get("PIPLOG_DEBUG"):
-            print(f"[piplog] logger unavailable: {e}", file=sys.stderr)
+        if os.environ.get("RONTI_DEBUG"):
+            print(f"[rönti] logger unavailable: {e}", file=sys.stderr)
 
 
 def _check_advisory(name: str, version: str, install_id: int) -> None:
     try:
-        from piplog.db import get_conn
+        from ronti.db import get_conn
         with get_conn() as conn:
             hits = conn.execute(
                 """SELECT severity, description, cve FROM advisories
@@ -162,13 +162,13 @@ def _check_advisory(name: str, version: str, install_id: int) -> None:
             ).fetchall()
         if hits:
             print(f"\n{'='*60}", file=sys.stderr)
-            print(f"[piplog] \033[1;31m⚠  ADVISORY MATCH\033[0m  {name}=={version}", file=sys.stderr)
+            print(f"[rönti] \033[1;31m⚠  ADVISORY MATCH\033[0m  {name}=={version}", file=sys.stderr)
             for h in hits:
                 sev = h["severity"].upper()
                 print(f"  [{sev}] {h['description']}", file=sys.stderr)
                 if h["cve"]:
                     print(f"          {h['cve']}", file=sys.stderr)
-            print(f"  install_id={install_id} — run: piplog scan", file=sys.stderr)
+            print(f"  install_id={install_id} — run: ronti scan", file=sys.stderr)
             print(f"{'='*60}\n", file=sys.stderr)
     except Exception:
         pass
@@ -179,8 +179,8 @@ def _check_osv_batch(pkg_specs: list[str]) -> None:
     try:
         import importlib.metadata as meta
         import re
-        from piplog.osv import query_packages
-        from piplog.db import get_conn
+        from ronti.osv import query_packages
+        from ronti.db import get_conn
 
         packages: list[tuple[str, str]] = []
         seen: set[str] = set()
@@ -221,7 +221,7 @@ def _check_osv_batch(pkg_specs: list[str]) -> None:
             return
 
         print(f"\n{'='*60}", file=sys.stderr)
-        print(f"[piplog] \033[1;31m⚠  OSV VULNERABILITY\033[0m", file=sys.stderr)
+        print(f"[rönti] \033[1;31m⚠  OSV VULNERABILITY\033[0m", file=sys.stderr)
         for (pkg, ver), vulns in sorted(hits.items()):
             for v in vulns:
                 sev = v["severity"].upper()
@@ -232,11 +232,11 @@ def _check_osv_batch(pkg_specs: list[str]) -> None:
                     print(f"    {v['cve']}  ({fix})", file=sys.stderr)
                 else:
                     print(f"    ({fix})", file=sys.stderr)
-        print(f"  run: piplog osv-scan", file=sys.stderr)
+        print(f"  run: ronti osv-scan", file=sys.stderr)
         print(f"{'='*60}\n", file=sys.stderr)
     except Exception as e:
-        if os.environ.get("PIPLOG_DEBUG"):
-            print(f"[piplog] OSV check failed: {e}", file=sys.stderr)
+        if os.environ.get("RONTI_DEBUG"):
+            print(f"[rönti] OSV check failed: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

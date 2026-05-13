@@ -173,7 +173,7 @@ def _fetch_osv_batch(
         api_results = data.get("results", [])
         if len(api_results) != len(chunk) and os.environ.get("PIPLOG_DEBUG"):
             print(
-                f"[piplog] OSV batch: expected {len(chunk)} results, got {len(api_results)}",
+                f"[rönti] OSV batch: expected {len(chunk)} results, got {len(api_results)}",
                 file=sys.stderr,
             )
         for (name, version), result in zip(chunk, api_results):
@@ -298,7 +298,7 @@ def _query_via_pip_audit(
     if not exe:
         return None
 
-    req_fd, req_path = tempfile.mkstemp(suffix=".txt", prefix="piplog-audit-")
+    req_fd, req_path = tempfile.mkstemp(suffix=".txt", prefix="ronti-audit-")
     try:
         with os.fdopen(req_fd, "w") as f:
             for name, version in packages:

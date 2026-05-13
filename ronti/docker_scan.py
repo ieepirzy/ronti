@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-piplog-docker-scan — standalone advisory scanner for Dockerfiles.
+rönti-docker-scan — standalone advisory scanner for Dockerfiles.
 Zero external dependencies. Copy into your image and run after pip install.
 
 Usage in Dockerfile:
-    COPY piplog-docker-scan.py /usr/local/bin/piplog-docker-scan
-    RUN pip install -r requirements.txt && python /usr/local/bin/piplog-docker-scan -r requirements.txt
+    COPY rönti-docker-scan.py /usr/local/bin/rönti-docker-scan
+    RUN pip install -r requirements.txt && python /usr/local/bin/rönti-docker-scan -r requirements.txt
 
 Or against the live installed packages:
-    RUN pip install -r requirements.txt && python /usr/local/bin/piplog-docker-scan
+    RUN pip install -r requirements.txt && python /usr/local/bin/rönti-docker-scan
 
 Exit code 0 = clean, 1 = advisory match found.
 Add --warn-only to always exit 0 (log but don't fail the build).
@@ -46,12 +46,12 @@ def _osv_query(packages: list[tuple[str, str]]) -> dict[tuple[str, str], list[di
             with urllib.request.urlopen(req, timeout=15) as resp:
                 data = json.loads(resp.read())
         except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
-            print(f"[piplog-docker-scan] OSV query failed: {e}", file=sys.stderr)
+            print(f"[rönti] OSV query failed: {e}", file=sys.stderr)
             continue
         api_results = data.get("results", [])
         if len(api_results) != len(chunk):
             print(
-                f"[piplog-docker-scan] OSV batch: expected {len(chunk)} results, got {len(api_results)}",
+                f"[rönti] OSV batch: expected {len(chunk)} results, got {len(api_results)}",
                 file=sys.stderr,
             )
         for (name, ver), result in zip(chunk, api_results):
@@ -168,7 +168,7 @@ def parse_name_version(spec):
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="piplog standalone OSV scanner")
+    parser = argparse.ArgumentParser(description="rönti standalone OSV scanner")
     parser.add_argument("-r", "--requirements", default=None)
     parser.add_argument("--warn-only", action="store_true", help="log but always exit 0")
     parser.add_argument("--json", dest="as_json", action="store_true")

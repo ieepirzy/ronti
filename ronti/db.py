@@ -2,7 +2,7 @@ import sqlite3
 import os
 from pathlib import Path
 
-DB_PATH = Path(os.environ.get("PIPLOG_DB", "/var/lib/piplog/audit.db"))
+DB_PATH = Path(os.environ.get("RONTI_DB", "/var/lib/ronti/audit.db"))
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS installs (

@@ -1,7 +1,7 @@
 """
-piplog sitecustomize hook.
+rönti sitecustomize hook.
 Drop this into a venv's site-packages to intercept pip installs inside that venv.
-Installed automatically by `piplog inject-venv <path>`.
+Installed automatically by `ronti inject-venv <path>`.
 
 Works by monkey-patching pip's post-install wheel recording.
 """
@@ -19,8 +19,8 @@ def _install_hook():
             try:
                 import importlib.metadata as meta
                 version = meta.version(name)
-                from piplog.logger import log_install
-                from piplog.db import get_conn
+                from ronti.logger import log_install
+                from ronti.db import get_conn
                 log_install(name, version)
                 with get_conn() as conn:
                     hits = conn.execute(
@@ -30,7 +30,7 @@ def _install_hook():
                     ).fetchall()
                 if hits:
                     for h in hits:
-                        msg = f"[piplog] ⚠  {name}=={version} [{h['severity'].upper()}]: {h['description']}"
+                        msg = f"[rönti] ⚠  {name}=={version} [{h['severity'].upper()}]: {h['description']}"
                         if h["cve"]:
                             msg += f"  ({h['cve']})"
                         print(msg, file=sys.stderr)
@@ -43,5 +43,5 @@ def _install_hook():
         pass
 
 
-if os.environ.get("PIPLOG_DISABLE", "").lower() not in ("1", "true", "yes"):
+if os.environ.get("RONTI_DISABLE", "").lower() not in ("1", "true", "yes"):
     _install_hook()
