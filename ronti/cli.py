@@ -236,19 +236,30 @@ def cmd_inject_venv(args):
     if not venv.exists():
         print(f"venv not found: {venv}")
         sys.exit(1)
-    py = f"python{sys.version_info.major}.{sys.version_info.minor}"
-    site = venv / "lib" / py / "site-packages"
-    if not site.exists():
-        # try without minor version
-        candidates = list((venv / "lib").glob("python*/site-packages"))
-        if not candidates:
-            print(f"Could not find site-packages in {venv}")
-            sys.exit(1)
-        site = candidates[0]
-    dest = site / "sitecustomize.py"
-    src  = Path(__file__).parent / "sitecustomize.py"
-    shutil.copy(src, dest)
-    print(f"Injected rönti hook → {dest}")
+
+    bin_dir = venv / "bin"
+    if not bin_dir.exists():
+        print(f"Could not find bin/ in {venv}")
+        sys.exit(1)
+
+    pip_bin = next((bin_dir / n for n in ("pip", "pip3") if (bin_dir / n).exists()), None)
+    if pip_bin is None:
+        print(f"Could not find pip or pip3 in {bin_dir}")
+        sys.exit(1)
+
+    shim_src = Path(__file__).parent / "shim.py"
+    real_backup = bin_dir / ".pip-real"
+
+    # Resolve through symlinks so the backup is the real underlying script
+    real_pip = pip_bin.resolve()
+    if not real_backup.exists():
+        shutil.copy(real_pip, real_backup)
+        real_backup.chmod(0o755)
+
+    # Writing to the resolved path covers all symlinks pointing at it (pip, pip3, pip3.x)
+    shutil.copy(shim_src, real_pip)
+    real_pip.chmod(0o755)
+    print(f"Injected rönti hook → {pip_bin}")
 
 
 def _install_shim() -> None:

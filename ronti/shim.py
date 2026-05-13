@@ -18,15 +18,19 @@ PIPLOG_ENABLED = (
 
 
 def _find_real_pip() -> str:
+    # Venv install: shim lives in .venv/bin/pip, backup is .venv/bin/.pip-real
+    sibling = Path(__file__).parent / ".pip-real"
+    if sibling.exists():
+        return str(sibling)
+
     real = shutil.which("pip3") or shutil.which("pip")
     if not real:
         print("[rönti] cannot find pip3 or pip on PATH", file=sys.stderr)
         sys.exit(1)
-    # Avoid pointing back at ourselves
     if Path(real).resolve() == Path(__file__).resolve():
-        backup = "/usr/local/bin/.pip-real"
-        if Path(backup).exists():
-            return backup
+        backup = Path("/usr/local/bin/.pip-real")
+        if backup.exists():
+            return str(backup)
         print("[rönti] shim loop detected and no .pip-real backup found", file=sys.stderr)
         sys.exit(1)
     return real
