@@ -10,7 +10,7 @@ import urllib.error
 from datetime import datetime, timezone, timedelta
 
 OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
-CACHE_TTL = timedelta(hours=24)
+CACHE_TTL = timedelta(hours=6)
 _BATCH_SIZE = 1000  # OSV API limit per request
 
 

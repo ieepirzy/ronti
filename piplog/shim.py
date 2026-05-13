@@ -51,14 +51,60 @@ def _parse_installs(args: list[str]) -> list[str]:
 
 def main() -> None:
     real_pip = _find_real_pip()
+    pkg_specs = _parse_installs(sys.argv[1:]) if PIPLOG_ENABLED else []
+
+    # Pre-install: check explicitly pinned packages against OSV before pip runs
+    if pkg_specs:
+        _pre_check_osv(pkg_specs)
+
     result = subprocess.run([real_pip] + sys.argv[1:])
 
-    if result.returncode == 0 and PIPLOG_ENABLED:
-        pkg_specs = _parse_installs(sys.argv[1:])
-        if pkg_specs:
-            _log_installed(pkg_specs)
+    # Post-install: log and check full dep tree (versions now resolved)
+    if result.returncode == 0 and pkg_specs:
+        _log_installed(pkg_specs)
 
     sys.exit(result.returncode)
+
+
+def _pre_check_osv(pkg_specs: list[str]) -> None:
+    """Query OSV for explicitly pinned packages before pip runs."""
+    try:
+        from piplog.db import get_conn, init_db
+        from piplog.osv import query_packages
+
+        packages = []
+        for spec in pkg_specs:
+            if "==" in spec:
+                name, _, version = spec.partition("==")
+                name = name.strip().lower()
+                version = version.strip()
+                if name and version and not name.startswith((".", "/")):
+                    packages.append((name, version))
+
+        if not packages:
+            return
+
+        init_db()
+        with get_conn() as conn:
+            hits = query_packages(packages, conn)
+
+        if not hits:
+            return
+
+        print(f"\n{'='*60}", file=sys.stderr)
+        print(f"[piplog] \033[1;31m⚠  OSV: vulnerable version pinned\033[0m", file=sys.stderr)
+        for (pkg, ver), vulns in sorted(hits.items()):
+            for v in vulns:
+                sev = v["severity"].upper()
+                fix = f"upgrade to {v['fixed']}" if v["fixed"] else "no fix available"
+                print(f"  [{sev}] {pkg}=={ver}: {v['summary']}", file=sys.stderr)
+                ref = v["cve"] or v["id"]
+                print(f"          {ref}  ({fix})", file=sys.stderr)
+        print(f"  proceeding with install — run: piplog osv-scan", file=sys.stderr)
+        print(f"{'='*60}\n", file=sys.stderr)
+    except Exception as e:
+        if os.environ.get("PIPLOG_DEBUG"):
+            print(f"[piplog] pre-install OSV check failed: {e}", file=sys.stderr)
 
 
 def _log_installed(pkg_specs: list[str]) -> None:
