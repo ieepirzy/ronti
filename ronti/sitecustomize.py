@@ -14,8 +14,9 @@ def _install_hook():
         import pip._internal.operations.install.wheel as _wheel_mod
         _orig_install = _wheel_mod.install_wheel
 
-        def _patched_install(name, wheel_zip, wheel_path, scheme, *args, **kwargs):
-            result = _orig_install(name, wheel_zip, wheel_path, scheme, *args, **kwargs)
+        def _patched_install(*args, **kwargs):
+            result = _orig_install(*args, **kwargs)
+            name = args[0] if args else kwargs.get("name", "")
             try:
                 import importlib.metadata as meta
                 version = meta.version(name)
