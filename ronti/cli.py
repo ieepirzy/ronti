@@ -220,6 +220,17 @@ def cmd_advisory(args):
         print(f"Added advisory for {args.package}" + (f"=={args.version}" if args.version else ""))
 
 
+def cmd_mount(args):
+    venv_path = getattr(args, "venv", None)
+    if not venv_path:
+        venv_path = os.environ.get("VIRTUAL_ENV", "")
+    if not venv_path:
+        print("no active venv detected — pass a path explicitly: ronti mount /path/to/.venv")
+        sys.exit(1)
+    args.venv = venv_path
+    cmd_inject_venv(args)
+
+
 def cmd_inject_venv(args):
     venv = Path(args.venv)
     if not venv.exists():
@@ -515,6 +526,10 @@ def main():
     p_adv_add.add_argument("--description", required=True)
     p_adv_add.add_argument("--cve", default=None)
 
+    # mount
+    p_mount = sub.add_parser("mount", help="inject hook into active venv (uses $VIRTUAL_ENV if no path given)")
+    p_mount.add_argument("venv", nargs="?", default=None)
+
     # inject-venv
     p_iv = sub.add_parser("inject-venv", help="install hook into a specific venv")
     p_iv.add_argument("venv")
@@ -544,6 +559,7 @@ def main():
         "diff":          cmd_diff,
         "repos":         cmd_repos,
         "advisory":      cmd_advisory,
+        "mount":         cmd_mount,
         "inject-venv":   cmd_inject_venv,
         "setup":         cmd_setup,
         "install-shim":  cmd_install_shim,

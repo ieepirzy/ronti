@@ -11,7 +11,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-PIPLOG_ENABLED = os.environ.get("RONTI_DISABLE", "").lower() not in ("1", "true", "yes")
+PIPLOG_ENABLED = (
+    os.environ.get("RONTI_DISABLE", "").lower() not in ("1", "true", "yes")
+    and not os.environ.get("RONTI_SHIM_ACTIVE")
+)
 
 
 def _find_real_pip() -> str:
@@ -76,7 +79,7 @@ def main() -> None:
     if pkg_specs:
         _pre_check_osv(pkg_specs)
 
-    result = subprocess.run([real_pip] + sys.argv[1:])
+    result = subprocess.run([real_pip] + sys.argv[1:], env={**os.environ, "RONTI_SHIM_ACTIVE": "1"})
 
     # Post-install: log and check full dep tree (versions now resolved)
     if result.returncode == 0 and pkg_specs:
@@ -119,8 +122,16 @@ def _pre_check_osv(pkg_specs: list[str]) -> None:
                 print(f"  [{sev}] {pkg}=={ver}: {v['summary']}", file=sys.stderr)
                 ref = v["cve"] or v["id"]
                 print(f"          {ref}  ({fix})", file=sys.stderr)
-        print(f"  proceeding with install — run: ronti osv-scan", file=sys.stderr)
         print(f"{'='*60}\n", file=sys.stderr)
+        sys.stderr.write("  Proceed with install? [y/N] ")
+        sys.stderr.flush()
+        try:
+            answer = sys.stdin.readline().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = "n"
+        if answer not in ("y", "yes"):
+            print("[rönti] install aborted.", file=sys.stderr)
+            sys.exit(1)
     except Exception as e:
         if os.environ.get("RONTI_DEBUG"):
             print(f"[rönti] pre-install OSV check failed: {e}", file=sys.stderr)
